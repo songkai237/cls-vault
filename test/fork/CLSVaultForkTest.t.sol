@@ -17,6 +17,9 @@ contract CLSVaultForkTest is Test {
     address private constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address private constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
+    uint256 private constant MIN_SWAP_USDC = 100 * 1e6;
+    uint256 private constant MIN_SWAP_WETH = 0.01 ether;
+
     int24 private constant HALF_RANGE = 600;
 
     uint256 private constant WETH_DEPOSIT = 10 ether;
@@ -32,11 +35,11 @@ contract CLSVaultForkTest is Test {
     function setUp() public {
         vm.createSelectFork(vm.envString("MAINNET_RPC"), 19_000_000);
 
-        strategy = new UniswapV3Strategy(POOL, NPM, SWAP_ROUTER, HALF_RANGE);
+        strategy = new UniswapV3Strategy(POOL, NPM, SWAP_ROUTER, HALF_RANGE, MIN_SWAP_USDC, MIN_SWAP_WETH);
         vault = new CLSVault(address(strategy), USDC, WETH);
         strategy.initialize(address(vault), owner);
 
-        harness = new UniswapV3StrategyHarness(POOL, NPM, SWAP_ROUTER, HALF_RANGE);
+        harness = new UniswapV3StrategyHarness(POOL, NPM, SWAP_ROUTER, HALF_RANGE, MIN_SWAP_USDC, MIN_SWAP_WETH);
     }
 
     function _depositAsUser() internal returns (uint256 shares) {

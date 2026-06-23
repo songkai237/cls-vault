@@ -25,23 +25,23 @@ contract UniswapV3StrategyTest is Test {
         token0 = new MockERC20("Token0", "T0");
         token1 = new MockERC20("Token1", "T1");
         pool = new MockPool(address(token0), address(token1), 500, TICK_SPACING, 0);
-        strategy = new UniswapV3StrategyHarness(address(pool), npm, swapRouter, HALF_RANGE);
+        strategy = new UniswapV3StrategyHarness(address(pool), npm, swapRouter, HALF_RANGE, 0, 0);
         strategy.initialize(vault, owner);
     }
 
     function testConstructorRevertsWhenHalfRangeZero() public {
         vm.expectRevert(UniswapV3Strategy.UniswapV3Strategy__InvalidTickRange.selector);
-        new UniswapV3StrategyHarness(address(pool), npm, swapRouter, 0);
+        new UniswapV3StrategyHarness(address(pool), npm, swapRouter, 0, 0, 0);
     }
 
     function testConstructorRevertsWhenHalfRangeNegative() public {
         vm.expectRevert(UniswapV3Strategy.UniswapV3Strategy__InvalidTickRange.selector);
-        new UniswapV3StrategyHarness(address(pool), npm, swapRouter, -100);
+        new UniswapV3StrategyHarness(address(pool), npm, swapRouter, -100, 0, 0);
     }
 
     function testInitializeSetsVaultAndOwner() public {
         UniswapV3StrategyHarness fresh =
-            new UniswapV3StrategyHarness(address(pool), npm, swapRouter, HALF_RANGE);
+            new UniswapV3StrategyHarness(address(pool), npm, swapRouter, HALF_RANGE, 0, 0);
         fresh.initialize(vault, owner);
     }
 

@@ -16,6 +16,9 @@ contract UniswapV3StrategyForkTest is Test {
     address private constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address private constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
+    uint256 private constant MIN_SWAP_USDC = 100 * 1e6;
+    uint256 private constant MIN_SWAP_WETH = 0.01 ether;
+
     int24 private constant HALF_RANGE = 600;
 
     uint256 private constant WETH_DEPOSIT = 10 ether;
@@ -30,10 +33,10 @@ contract UniswapV3StrategyForkTest is Test {
     function setUp() public {
         vm.createSelectFork(vm.envString("MAINNET_RPC"), 19_000_000);
 
-        strategy = new UniswapV3Strategy(POOL, NPM, SWAP_ROUTER, HALF_RANGE);
+        strategy = new UniswapV3Strategy(POOL, NPM, SWAP_ROUTER, HALF_RANGE, MIN_SWAP_USDC, MIN_SWAP_WETH);
         strategy.initialize(vault, owner);
 
-        harness = new UniswapV3StrategyHarness(POOL, NPM, SWAP_ROUTER, HALF_RANGE);
+        harness = new UniswapV3StrategyHarness(POOL, NPM, SWAP_ROUTER, HALF_RANGE, MIN_SWAP_USDC, MIN_SWAP_WETH);
     }
 
     function _fundStrategy() internal {
@@ -108,7 +111,7 @@ contract UniswapV3StrategyForkTest is Test {
         assertEq(upperAfter, upperBefore);
     }
 
-    function testDepositRebalancesWhenOutOfRangeWithoutSwap() public {
+    function testDepositRebalancesWhenOutOfRange() public {
         _fundStrategy();
         vm.prank(vault);
         strategy.deposit();
@@ -118,23 +121,15 @@ contract UniswapV3StrategyForkTest is Test {
         int24 tickAfterSwap = _currentTick();
         assertGt(tickAfterSwap, oldUpper);
 
-        uint256 routerWethBefore = IERC20(WETH).balanceOf(SWAP_ROUTER);
-        uint256 routerUsdcBefore = IERC20(USDC).balanceOf(SWAP_ROUTER);
-
         _fundStrategy();
         vm.prank(vault);
         strategy.deposit();
-
-        assertEq(IERC20(WETH).balanceOf(SWAP_ROUTER), routerWethBefore);
-        assertEq(IERC20(USDC).balanceOf(SWAP_ROUTER), routerUsdcBefore);
 
         (,, uint128 liquidity, int24 newLower, int24 newUpper,,) = strategy.getPosition();
         assertGt(liquidity, 0);
         assertFalse(newLower == oldLower && newUpper == oldUpper);
 
         (int24 expectedLower, int24 expectedUpper) = _expectedTickRange(tickAfterSwap);
-        console2.log("expectedLower", expectedLower);
-        console2.log("expectedUpper", expectedUpper);
         assertEq(newLower, expectedLower);
         assertEq(newUpper, expectedUpper);
         assertGe(tickAfterSwap, newLower);

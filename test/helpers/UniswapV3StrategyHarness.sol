@@ -5,9 +5,14 @@ import {UniswapV3Strategy} from "../../src/strategy/UniswapV3Strategy.sol";
 
 /// @dev Exposes internal helpers for unit testing.
 contract UniswapV3StrategyHarness is UniswapV3Strategy {
-    constructor(address pool, address npm, address swapRouter, int24 halfRangeTicks)
-        UniswapV3Strategy(pool, npm, swapRouter, halfRangeTicks)
-    {}
+    constructor(
+        address pool,
+        address npm,
+        address swapRouter,
+        int24 halfRangeTicks,
+        uint256 minSwapAmount0,
+        uint256 minSwapAmount1
+    ) UniswapV3Strategy(pool, npm, swapRouter, halfRangeTicks, minSwapAmount0, minSwapAmount1) {}
 
     function exposedComputeTickRange(int24 currentTick) external view returns (int24 tickLower, int24 tickUpper) {
         return _computeTickRange(currentTick);

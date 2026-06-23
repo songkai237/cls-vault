@@ -27,6 +27,8 @@ contract UniswapV3Strategy is IStrategy {
     uint24 private immutable fee;
     address private immutable swapRouter;
     int24 private immutable halfRangeTicks;
+    uint256 private immutable minSwapAmount0;
+    uint256 private immutable minSwapAmount1;
 
     address private vault;
     address private owner;
@@ -35,7 +37,14 @@ contract UniswapV3Strategy is IStrategy {
 
     uint256 internal tokenID;
 
-    constructor(address _pool, address _npm, address _swapRouter, int24 _halfRangeTicks) {
+    constructor(
+        address _pool,
+        address _npm,
+        address _swapRouter,
+        int24 _halfRangeTicks,
+        uint256 _minSwapAmount0,
+        uint256 _minSwapAmount1
+    ) {
         if (_halfRangeTicks <= 0) {
             revert UniswapV3Strategy__InvalidTickRange();
         }
@@ -43,6 +52,8 @@ contract UniswapV3Strategy is IStrategy {
         npm = INonfungiblePositionManager(_npm);
         swapRouter = _swapRouter;
         halfRangeTicks = _halfRangeTicks;
+        minSwapAmount0 = _minSwapAmount0;
+        minSwapAmount1 = _minSwapAmount1;
 
         IUniswapV3Pool pool_ = IUniswapV3Pool(_pool);
         token0 = pool_.token0();
@@ -99,8 +110,11 @@ contract UniswapV3Strategy is IStrategy {
             tickUpper = currentTickUpper;
         }
 
+        _basicSwap(tickLower, tickUpper);
+
         uint256 amount0 = IERC20(token0).balanceOf(address(this));
         uint256 amount1 = IERC20(token1).balanceOf(address(this));
+
         if (amount0 > 0 || amount1 > 0) {
             _depositLiquidity(tickLower, tickUpper, amount0, amount1, 0, 0, block.timestamp + 600);
         }
@@ -379,7 +393,6 @@ contract UniswapV3Strategy is IStrategy {
         returns (int24 tickLower, int24 tickUpper)
     {
         (tickLower, tickUpper) = _computeTickRange(currentTick);
-        // _swapToOptimalRatio(tickLower, tickUpper);
     }
 
     function _computeTickRange(int24 currentTick) internal view returns (int24 tickLower, int24 tickUpper) {
@@ -401,50 +414,56 @@ contract UniswapV3Strategy is IStrategy {
         return compressed * spacing;
     }
 
-    /// @dev Swap excess token inventory so mint uses both sides efficiently.
-    // function _swapToOptimalRatio(int24 tickLower, int24 tickUpper) internal {
-    //     uint256 amount0 = IERC20(token0).balanceOf(address(this));
-    //     uint256 amount1 = IERC20(token1).balanceOf(address(this));
-    //     if (amount0 == 0 && amount1 == 0) {
-    //         return;
-    //     }
+    /// @dev Swap excess token inventory so mint uses both sides efficiently (closed-form at spot price).
+    function _basicSwap(int24 tickLower, int24 tickUpper) internal {
+        uint256 amount0 = IERC20(token0).balanceOf(address(this));
+        uint256 amount1 = IERC20(token1).balanceOf(address(this));
+        if (amount0 == 0 && amount1 == 0) {
+            return;
+        }
 
-    //     (uint160 sqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
-    //     uint160 sqrtLower = TickMath.getSqrtRatioAtTick(tickLower);
-    //     uint160 sqrtUpper = TickMath.getSqrtRatioAtTick(tickUpper);
+        (uint160 sqrtPriceX96,,,,,,) = IUniswapV3Pool(pool).slot0();
+        uint160 sqrtLower = TickMath.getSqrtRatioAtTick(tickLower);
+        uint160 sqrtUpper = TickMath.getSqrtRatioAtTick(tickUpper);
 
-    //     uint128 liquidity =
-    //         LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtLower, sqrtUpper, amount0, amount1);
-    //     if (liquidity == 0) {
-    //         return;
-    //     }
+        uint128 liquidity =
+            LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtLower, sqrtUpper, amount0, amount1);
+        if (liquidity == 0) {
+            return;
+        }
 
-    //     (uint256 need0, uint256 need1) =
-    //         LiquidityAmounts.getAmountsForLiquidity(sqrtPriceX96, sqrtLower, sqrtUpper, liquidity);
+        (uint256 need0, uint256 need1) =
+            LiquidityAmounts.getAmountsForLiquidity(sqrtPriceX96, sqrtLower, sqrtUpper, liquidity);
 
-    //     if (amount0 > need0) {
-    //         _swapExactInput(token0, token1, amount0 - need0);
-    //     } else if (amount1 > need1) {
-    //         _swapExactInput(token1, token0, amount1 - need1);
-    //     }
-    // }
+        if (amount0 > need0) {
+            uint256 excess0 = amount0 - need0;
+            if (excess0 >= minSwapAmount0) {
+                _swapExactInput(token0, token1, excess0);
+            }
+        } else if (amount1 > need1) {
+            uint256 excess1 = amount1 - need1;
+            if (excess1 >= minSwapAmount1) {
+                _swapExactInput(token1, token0, excess1);
+            }
+        }
+    }
 
-    // function _swapExactInput(address tokenIn, address tokenOut, uint256 amountIn) internal {
-    //     if (amountIn == 0) {
-    //         return;
-    //     }
+    function _swapExactInput(address tokenIn, address tokenOut, uint256 amountIn) internal {
+        if (amountIn == 0) {
+            return;
+        }
 
-    //     ISwapRouter(swapRouter).exactInputSingle(
-    //         ISwapRouter.ExactInputSingleParams({
-    //             tokenIn: tokenIn,
-    //             tokenOut: tokenOut,
-    //             fee: fee,
-    //             recipient: address(this),
-    //             deadline: block.timestamp,
-    //             amountIn: amountIn,
-    //             amountOutMinimum: 0,
-    //             sqrtPriceLimitX96: 0
-    //         })
-    //     );
-    // }
+        ISwapRouter(swapRouter).exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: fee,
+                recipient: address(this),
+                deadline: block.timestamp,
+                amountIn: amountIn,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
 }
