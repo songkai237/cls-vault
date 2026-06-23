@@ -33,7 +33,7 @@ contract UniswapV3Strategy is IStrategy {
     bool private initialized;
     INonfungiblePositionManager private immutable npm;
 
-    uint256 private tokenID;
+    uint256 internal tokenID;
 
     constructor(address _pool, address _npm, address _swapRouter, int24 _halfRangeTicks) {
         if (_halfRangeTicks <= 0) {
@@ -146,6 +146,11 @@ contract UniswapV3Strategy is IStrategy {
         } else if (tokenID != 0 && (tokensOwed0 > 0 || tokensOwed1 > 0)) {
             _collect();
         }
+
+        uint256 balance0 = IERC20(token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(token1).balanceOf(address(this));
+        if (amount0 > balance0) amount0 = balance0;
+        if (amount1 > balance1) amount1 = balance1;
 
         IERC20(token0).safeTransfer(recipient, amount0);
         IERC20(token1).safeTransfer(recipient, amount1);

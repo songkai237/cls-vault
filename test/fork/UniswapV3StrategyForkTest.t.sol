@@ -4,6 +4,8 @@ pragma solidity 0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {console2} from "forge-std/console2.sol";
 import {UniswapV3Strategy} from "../../src/strategy/UniswapV3Strategy.sol";
+import {UniswapV3StrategyHarness} from "../helpers/UniswapV3StrategyHarness.sol";
+import {ISwapRouter} from "../../src/interfaces/ISwapRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IUniswapV3Pool} from "@uniswap/v3-core/interfaces/IUniswapV3Pool.sol";
 
@@ -14,67 +16,187 @@ contract UniswapV3StrategyForkTest is Test {
     address private constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     address private constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
-    uint256 private constant WETHAmount = 10 * 1e18;
-    uint256 private constant USDCAmount = 30000 * 1e6;
-    int24 private tick;
-    int24 private tickLower;
-    int24 private tickUpper;
+    int24 private constant HALF_RANGE = 600;
 
-    UniswapV3Strategy strategy;
+    uint256 private constant WETH_DEPOSIT = 10 ether;
+    uint256 private constant USDC_DEPOSIT = 30_000 * 1e6;
 
-    address public user = makeAddr("user");
+    UniswapV3Strategy internal strategy;
+    UniswapV3StrategyHarness internal harness;
+
+    address internal vault = makeAddr("vault");
+    address internal owner = makeAddr("owner");
 
     function setUp() public {
         vm.createSelectFork(vm.envString("MAINNET_RPC"), 19_000_000);
-        strategy = new UniswapV3Strategy(POOL, NPM, SWAP_ROUTER, 18_000);
 
-        (uint160 sqrtPriceX96, int24 _tick,,,,,) = IUniswapV3Pool(POOL).slot0();
-        tick = _tick;
+        strategy = new UniswapV3Strategy(POOL, NPM, SWAP_ROUTER, HALF_RANGE);
+        strategy.initialize(vault, owner);
 
-        console2.log("current tick", tick);
+        harness = new UniswapV3StrategyHarness(POOL, NPM, SWAP_ROUTER, HALF_RANGE);
     }
 
-    function base() public {
-        deal(WETH, address(strategy), WETHAmount);
-        deal(USDC, address(strategy), USDCAmount);
-
-        vm.startPrank(address(strategy));
-        IERC20(WETH).approve(NPM, WETHAmount);
-        IERC20(USDC).approve(NPM, USDCAmount);
-        vm.stopPrank();
-
-        tickLower = tick - 18005;
-        tickUpper = tick + 19005;
-
-        // strategy.depositLiquidity(tickLower, tickUpper, 10 * 1e18, 30000 * 1e6, 0, 0, block.timestamp + 1000);
+    function _fundStrategy() internal {
+        deal(WETH, address(strategy), WETH_DEPOSIT);
+        deal(USDC, address(strategy), USDC_DEPOSIT);
     }
 
-    // function testMintAndGetPosition() public {
-    //     base();
-    //     (uint256 amount0, uint256 amount1, uint128 liquidity, int24 tLower, int24 tUpper,,) = strategy.getPosition();
-    //     assertGt(liquidity, 0);
-    //     assertEq(tLower, tickLower);
-    //     assertEq(tUpper, tickUpper);
-    //     assertGt(amount0 + amount1, 0);
+    function _currentTick() internal view returns (int24 tick) {
+        (, tick,,,,,) = IUniswapV3Pool(POOL).slot0();
+    }
 
-    //     console2.log("amount0", amount0);
-    //     console2.log("amount1", amount1);
-    //     console2.log("liquidity", liquidity);
-    //     console2.log("tLower", tLower);
-    //     console2.log("tUpper", tUpper);
-    // }
+    function _expectedTickRange(int24 currentTick) internal view returns (int24 tickLower, int24 tickUpper) {
+        (tickLower, tickUpper) = harness.exposedComputeTickRange(currentTick);
+    }
 
-    // function testWithdrawAndCollectLiquidity() public {
-    //     base();
-    //     (uint256 amount0, uint256 amount1, uint128 liquidity, int24 tLower, int24 tUpper,,) = strategy.getPosition();
-    //     strategy.withdrawLiquidity(liquidity);
-    //     (amount0, amount1, liquidity, tLower, tUpper,,) = strategy.getPosition();
-    //     assertEq(amount0, 0);
-    //     assertEq(amount1, 0);
-    //     assertEq(liquidity, 0);
+    /// @dev Push pool tick above `upperBound` by swapping WETH into USDC.
+    function _pushTickAbove(int24 upperBound) internal {
+        deal(WETH, address(this), 50_000 ether);
+        IERC20(WETH).approve(SWAP_ROUTER, type(uint256).max);
 
-    //     strategy.collectFees();
-    //     assertApproxEqAbs(IERC20(WETH).balanceOf(address(strategy)), WETHAmount, 1e15);
-    //     assertApproxEqAbs(IERC20(USDC).balanceOf(address(strategy)), USDCAmount, 1e4);
-    // }
+        uint256 amountIn = 500 ether;
+        while (_currentTick() <= upperBound && amountIn <= 10_000 ether) {
+            ISwapRouter(SWAP_ROUTER).exactInputSingle(
+                ISwapRouter.ExactInputSingleParams({
+                    tokenIn: WETH,
+                    tokenOut: USDC,
+                    fee: 500,
+                    recipient: address(this),
+                    deadline: block.timestamp,
+                    amountIn: amountIn,
+                    amountOutMinimum: 0,
+                    sqrtPriceLimitX96: 0
+                })
+            );
+            amountIn += 500 ether;
+        }
+        console2.log("pushed tick above", upperBound);
+        console2.log("current tick", _currentTick());
+    }
+
+    function testFirstDepositMintsPositionCenteredOnCurrentTick() public {
+        _fundStrategy();
+
+        int24 tickBefore = _currentTick();
+        (int24 expectedLower, int24 expectedUpper) = _expectedTickRange(tickBefore);
+
+        vm.prank(vault);
+        strategy.deposit();
+
+        (,, uint128 liquidity, int24 tickLower, int24 tickUpper,,) = strategy.getPosition();
+        assertGt(liquidity, 0);
+        assertEq(tickLower, expectedLower);
+        assertEq(tickUpper, expectedUpper);
+        assertGe(tickBefore, tickLower);
+        assertLe(tickBefore, tickUpper);
+    }
+
+    function testSecondDepositInRangeIncreasesLiquidityWithoutChangingRange() public {
+        _fundStrategy();
+        vm.prank(vault);
+        strategy.deposit();
+
+        (,, uint128 liquidityBefore, int24 lowerBefore, int24 upperBefore,,) = strategy.getPosition();
+
+        _fundStrategy();
+        vm.prank(vault);
+        strategy.deposit();
+
+        (,, uint128 liquidityAfter, int24 lowerAfter, int24 upperAfter,,) = strategy.getPosition();
+        assertGt(liquidityAfter, liquidityBefore);
+        assertEq(lowerAfter, lowerBefore);
+        assertEq(upperAfter, upperBefore);
+    }
+
+    function testDepositRebalancesWhenOutOfRangeWithoutSwap() public {
+        _fundStrategy();
+        vm.prank(vault);
+        strategy.deposit();
+
+        (,,, int24 oldLower, int24 oldUpper,,) = strategy.getPosition();
+        _pushTickAbove(oldUpper);
+        int24 tickAfterSwap = _currentTick();
+        assertGt(tickAfterSwap, oldUpper);
+
+        uint256 routerWethBefore = IERC20(WETH).balanceOf(SWAP_ROUTER);
+        uint256 routerUsdcBefore = IERC20(USDC).balanceOf(SWAP_ROUTER);
+
+        _fundStrategy();
+        vm.prank(vault);
+        strategy.deposit();
+
+        assertEq(IERC20(WETH).balanceOf(SWAP_ROUTER), routerWethBefore);
+        assertEq(IERC20(USDC).balanceOf(SWAP_ROUTER), routerUsdcBefore);
+
+        (,, uint128 liquidity, int24 newLower, int24 newUpper,,) = strategy.getPosition();
+        assertGt(liquidity, 0);
+        assertFalse(newLower == oldLower && newUpper == oldUpper);
+
+        (int24 expectedLower, int24 expectedUpper) = _expectedTickRange(tickAfterSwap);
+        console2.log("expectedLower", expectedLower);
+        console2.log("expectedUpper", expectedUpper);
+        assertEq(newLower, expectedLower);
+        assertEq(newUpper, expectedUpper);
+        assertGe(tickAfterSwap, newLower);
+        assertLe(tickAfterSwap, newUpper);
+    }
+
+    function testOwnerRebalanceReturnsNewRangeWithoutMutatingPosition() public {
+        _fundStrategy();
+        vm.prank(vault);
+        strategy.deposit();
+
+        (,, uint128 liquidityBefore, int24 posLowerBefore, int24 posUpperBefore,,) = strategy.getPosition();
+        int24 tick = _currentTick();
+
+        vm.prank(owner);
+        (int24 tickLower, int24 tickUpper) = strategy.rebalance();
+
+        (int24 expectedLower, int24 expectedUpper) = _expectedTickRange(tick);
+        assertEq(tickLower, expectedLower);
+        assertEq(tickUpper, expectedUpper);
+
+        (,, uint128 liquidityAfter, int24 posLowerAfter, int24 posUpperAfter,,) = strategy.getPosition();
+        assertEq(liquidityAfter, liquidityBefore);
+        assertEq(posLowerAfter, posLowerBefore);
+        assertEq(posUpperAfter, posUpperBefore);
+    }
+
+    function testPartialWithdrawReturnsProRataTokens() public {
+        _fundStrategy();
+        vm.prank(vault);
+        strategy.deposit();
+
+        (uint256 total0, uint256 total1) = strategy.getTotalAssets();
+        uint256 totalShares = 1000;
+        uint256 withdrawShares = 250;
+
+        uint256 expected0 = total0 * withdrawShares / totalShares;
+        uint256 expected1 = total1 * withdrawShares / totalShares;
+
+        address recipient = makeAddr("recipient");
+        vm.prank(vault);
+        (uint256 amount0, uint256 amount1) = strategy.withdraw(withdrawShares, totalShares, recipient);
+
+        assertApproxEqAbs(amount0, expected0, 1e4);
+        assertApproxEqAbs(amount1, expected1, 1e15);
+        assertEq(IERC20(USDC).balanceOf(recipient), amount0);
+        assertEq(IERC20(WETH).balanceOf(recipient), amount1);
+    }
+
+    function testFullWithdrawClosesPosition() public {
+        _fundStrategy();
+        vm.prank(vault);
+        strategy.deposit();
+
+        address recipient = makeAddr("recipient");
+        vm.prank(vault);
+        (uint256 amount0, uint256 amount1) = strategy.withdraw(100, 100, recipient);
+
+        assertGt(amount0 + amount1, 0);
+        (,, uint128 liquidity,,,,) = strategy.getPosition();
+        assertEq(liquidity, 0);
+        assertEq(IERC20(USDC).balanceOf(address(strategy)), 0);
+        assertEq(IERC20(WETH).balanceOf(address(strategy)), 0);
+    }
 }
