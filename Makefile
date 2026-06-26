@@ -1,6 +1,18 @@
 build:
 	forge build
 
+deploy-dry:
+	forge script script/Deploy.s.sol:DeployCLSVault --rpc-url mainnet -vvvv
+
+deploy:
+	forge script script/Deploy.s.sol:DeployCLSVault --rpc-url mainnet --broadcast -vvvv
+
+deploy-sepolia-dry:
+	forge script script/Deploy.s.sol:DeployCLSVault --rpc-url sepolia --account test -vvvv
+
+deploy-sepolia:
+	forge script script/Deploy.s.sol:DeployCLSVault --rpc-url sepolia --account test --broadcast -vvvv
+
 keeper-bindings:
 	forge build
 	mkdir -p keeper/internal/contracts
