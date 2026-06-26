@@ -90,6 +90,20 @@ contract UniswapV3Strategy is IStrategy {
     }
 
     function deposit() external onlyVault {
+        _deployLiquidity();
+    }
+
+    /// @dev Owner entrypoint: rebalance range, optional swap, mint/increase liquidity.
+    function maintain() external onlyOwner {
+        _deployLiquidity();
+    }
+
+    function needRebalance() external view returns (bool) {
+        (int24 currentTick, int24 currentTickLower, int24 currentTickUpper,) = _getRebalanceParams();
+        return _needRebalance(currentTick, currentTickLower, currentTickUpper);
+    }
+
+    function _deployLiquidity() internal {
         int24 tickLower;
         int24 tickUpper;
         (int24 currentTick, int24 currentTickLower, int24 currentTickUpper, uint128 liquidity) =
@@ -231,6 +245,18 @@ contract UniswapV3Strategy is IStrategy {
 
     function getFee() external view returns (uint24) {
         return fee;
+    }
+
+    function getHalfRangeTicks() external view returns (int24) {
+        return halfRangeTicks;
+    }
+
+    function getMinSwapAmount0() external view returns (uint256) {
+        return minSwapAmount0;
+    }
+
+    function getMinSwapAmount1() external view returns (uint256) {
+        return minSwapAmount1;
     }
 
     function _getPositionValue() internal view returns (uint256 amount0, uint256 amount1) {
