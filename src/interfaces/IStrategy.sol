@@ -13,5 +13,5 @@ interface IStrategy {
     function getTotalValue() external view returns (uint256 value);
     function getTotalValue(uint256 amount0, uint256 amount1) external view returns (uint256 value);
     function needRebalance() external view returns (bool);
-    function maintain() external;
+    function maintain(bool zeroForOne, uint256 amountIn, int24 tickLower, int24 tickUpper) external;
 }

@@ -93,9 +93,22 @@ contract UniswapV3Strategy is IStrategy {
         _deployLiquidity();
     }
 
-    /// @dev Owner entrypoint: rebalance range, optional swap, mint/increase liquidity.
-    function maintain() external onlyOwner {
-        _deployLiquidity();
+    /// @dev Owner entrypoint: rebalance range, optimal swap, mint/increase liquidity.
+    function maintain(
+        bool zeroForOne,
+        uint256 amountIn,
+        int24 tickLower,
+        int24 tickUpper
+    ) external onlyOwner {
+        _collect();
+        npm.burn(tokenID);
+        tokenID = 0;
+        if (zeroForOne) {
+            _swapExactInput(token0, token1, amountIn);
+        } else {
+            _swapExactInput(token1, token0, amountIn);
+        }
+        _depositLiquidity(tickLower, tickUpper, 0, 0, 0, 0, block.timestamp + 600);
     }
 
     function needRebalance() external view returns (bool) {
