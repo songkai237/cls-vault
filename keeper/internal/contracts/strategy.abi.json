@@ -277,7 +277,28 @@
   {
     "type": "function",
     "name": "maintain",
-    "inputs": [],
+    "inputs": [
+      {
+        "name": "zeroForOne",
+        "type": "bool",
+        "internalType": "bool"
+      },
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "tickLower",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "tickUpper",
+        "type": "int24",
+        "internalType": "int24"
+      }
+    ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
