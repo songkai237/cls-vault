@@ -12,6 +12,7 @@ type Config struct {
 	RPCURL          string
 	PrivateKey      string
 	StrategyAddress string
+	QuoterAddress   string
 	PollInterval    time.Duration
 	DryRun          bool
 	ChainID         int64
@@ -24,6 +25,7 @@ func Load() (Config, error) {
 		RPCURL:          strings.TrimSpace(os.Getenv("RPC_URL")),
 		PrivateKey:      strings.TrimSpace(os.Getenv("PRIVATE_KEY")),
 		StrategyAddress: strings.TrimSpace(os.Getenv("STRATEGY_ADDRESS")),
+		QuoterAddress:   strings.TrimSpace(os.Getenv("QUOTER_ADDRESS")),
 		PollInterval:    12 * time.Second,
 		MinIdleAmount0:  strings.TrimSpace(os.Getenv("MIN_IDLE_AMOUNT0")),
 		MinIdleAmount1:  strings.TrimSpace(os.Getenv("MIN_IDLE_AMOUNT1")),
