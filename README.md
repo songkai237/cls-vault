@@ -14,14 +14,12 @@ cp script/.env.example .env
 2. 模拟部署（不上链）：
 
 ```bash
-make deploy-dry          # 主网
 make deploy-sepolia-dry  # Sepolia 测试网
 ```
 
 3. 正式部署：
 
 ```bash
-make deploy              # 主网
 make deploy-sepolia      # Sepolia 测试网
 ```
 
@@ -31,7 +29,6 @@ make deploy-sepolia      # Sepolia 测试网
 
 | 网络 | 默认池 | 费率 |
 |------|--------|------|
-| 主网 (1) | WETH/USDC | 0.05% |
 | Sepolia (11155111) | USDC/WETH | 0.3% |
 
 可通过 `.env` 覆盖 `POOL`、`NPM`、`SWAP_ROUTER`、`HALF_RANGE_TICKS`、`MIN_SWAP_AMOUNT0/1`、`STRATEGY_OWNER`；也可用 `DEPLOY_NETWORK=mainnet|sepolia` 强制选择默认集。
@@ -45,13 +42,18 @@ make deploy-sepolia      # Sepolia 测试网
 ```mermaid
 flowchart LR
     U[用户]
-    V[策略金库 Vault]
+    V[金库 Vault]
+    K[(Keeper)]
+    S[(策略合约 Strategy)]
     P[(Uniswap V3 Pool)]
 
     U -->|存入双币资产| V
-    V -->|部署流动性到指定价格区间| P
-    P -->|产生交易手续费| V
-    V -->|收益累计与再平衡执行| V
+    V -->|转入双币资产| S
+    S -->|部署流动性到指定价格区间| P
+    K -->|监控仓位状态| S
+    K -->|调整仓位| S
+    P -->|产生交易手续费| P
+    P -->|提取代币| S
     V -->|提取本金与收益| U
 ```
 
