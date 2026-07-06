@@ -113,7 +113,7 @@ contract DeployCLSVault is Script {
             });
         }
 
-        revert("Unsupported chain; set DEPLOY_NETWORK=mainnet|sepolia or POOL/NPM/SWAP_ROUTER");
+        return NetworkDefaults({name: "sepolia", pool: SEPOLIA_POOL, npm: SEPOLIA_NPM, swapRouter: SEPOLIA_SWAP_ROUTER});
     }
 
     function _resolveChainId() internal view returns (uint256) {
