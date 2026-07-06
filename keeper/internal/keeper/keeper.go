@@ -11,6 +11,7 @@ import (
 	"github.com/clsVault/keeper/internal/config"
 	"github.com/clsVault/keeper/internal/contracts"
 	"github.com/clsVault/keeper/internal/math"
+	"github.com/clsVault/keeper/internal/strategy"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -27,9 +28,8 @@ const (
 )
 
 type Decision struct {
-	Action  Action
-	Reason  string
-	Summary string
+	Action Action
+	Reason string
 }
 
 type Keeper struct {
@@ -37,6 +37,7 @@ type Keeper struct {
 	client   *ethclient.Client
 	strategy *contracts.UniswapV3Strategy
 	pool     *contracts.UniswapV3Pool
+	quoter   *contracts.IQuoterV2
 	token0   *contracts.ERC20
 	token1   *contracts.ERC20
 	chainID  *big.Int
@@ -46,6 +47,7 @@ type Keeper struct {
 	token1Addr   common.Address
 
 	halfRangeTicks int32
+	fee            uint32
 	minSwap0       *big.Int
 	minSwap1       *big.Int
 	minIdle0       *big.Int
@@ -61,12 +63,12 @@ func New(cfg config.Config) (*Keeper, error) {
 	}
 
 	strategyAddr := common.HexToAddress(cfg.StrategyAddress)
-	strategy, err := contracts.NewUniswapV3Strategy(strategyAddr, client)
+	strat, err := contracts.NewUniswapV3Strategy(strategyAddr, client)
 	if err != nil {
 		return nil, fmt.Errorf("bind strategy: %w", err)
 	}
 
-	poolAddr, err := strategy.GetPool(nil)
+	poolAddr, err := strat.GetPool(nil)
 	if err != nil {
 		return nil, fmt.Errorf("get pool: %w", err)
 	}
@@ -75,11 +77,11 @@ func New(cfg config.Config) (*Keeper, error) {
 		return nil, fmt.Errorf("bind pool: %w", err)
 	}
 
-	token0Addr, err := strategy.GetToken0(nil)
+	token0Addr, err := strat.GetToken0(nil)
 	if err != nil {
 		return nil, fmt.Errorf("get token0: %w", err)
 	}
-	token1Addr, err := strategy.GetToken1(nil)
+	token1Addr, err := strat.GetToken1(nil)
 	if err != nil {
 		return nil, fmt.Errorf("get token1: %w", err)
 	}
@@ -93,17 +95,21 @@ func New(cfg config.Config) (*Keeper, error) {
 		return nil, fmt.Errorf("bind token1: %w", err)
 	}
 
-	halfRangeBI, err := strategy.GetHalfRangeTicks(nil)
+	halfRangeBI, err := strat.GetHalfRangeTicks(nil)
 	if err != nil {
 		return nil, fmt.Errorf("get half range: %w", err)
 	}
-	minSwap0, err := strategy.GetMinSwapAmount0(nil)
+	minSwap0, err := strat.GetMinSwapAmount0(nil)
 	if err != nil {
 		return nil, fmt.Errorf("get min swap0: %w", err)
 	}
-	minSwap1, err := strategy.GetMinSwapAmount1(nil)
+	minSwap1, err := strat.GetMinSwapAmount1(nil)
 	if err != nil {
 		return nil, fmt.Errorf("get min swap1: %w", err)
+	}
+	feeBI, err := strat.GetFee(nil)
+	if err != nil {
+		return nil, fmt.Errorf("get fee: %w", err)
 	}
 
 	minIdle0 := new(big.Int).Set(minSwap0)
@@ -142,11 +148,21 @@ func New(cfg config.Config) (*Keeper, error) {
 		return nil, fmt.Errorf("transactor: %w", err)
 	}
 
+	var quoter *contracts.IQuoterV2
+	if cfg.QuoterAddress == "" {
+		return nil, fmt.Errorf("QUOTER_ADDRESS is required")
+	}
+	quoter, err = contracts.NewIQuoterV2(common.HexToAddress(cfg.QuoterAddress), client)
+	if err != nil {
+		return nil, fmt.Errorf("bind quoter: %w", err)
+	}
+
 	k := &Keeper{
 		cfg:            cfg,
 		client:         client,
-		strategy:       strategy,
+		strategy:       strat,
 		pool:           pool,
+		quoter:         quoter,
 		token0:         token0,
 		token1:         token1,
 		chainID:        chainID,
@@ -154,6 +170,7 @@ func New(cfg config.Config) (*Keeper, error) {
 		token0Addr:     token0Addr,
 		token1Addr:     token1Addr,
 		halfRangeTicks: math.Int24FromBigInt(halfRangeBI),
+		fee:            uint32(feeBI.Uint64()),
 		minSwap0:       minSwap0,
 		minSwap1:       minSwap1,
 		minIdle0:       minIdle0,
@@ -161,8 +178,9 @@ func New(cfg config.Config) (*Keeper, error) {
 		transactOpts:   transactOpts,
 	}
 
-	log.Printf("keeper ready strategy=%s pool=%s token0=%s token1=%s halfRange=%d",
-		strategyAddr.Hex(), poolAddr.Hex(), token0Addr.Hex(), token1Addr.Hex(), k.halfRangeTicks)
+	log.Printf("keeper ready strategy=%s pool=%s token0=%s token1=%s halfRange=%d fee=%d quoter=%s",
+		strategyAddr.Hex(), poolAddr.Hex(), token0Addr.Hex(), token1Addr.Hex(),
+		k.halfRangeTicks, k.fee, cfg.QuoterAddress)
 
 	return k, nil
 }
@@ -194,6 +212,16 @@ func (k *Keeper) tick(ctx context.Context) error {
 		state.Liquidity.String(), state.Idle0.String(), state.Idle1.String(),
 		state.Summary)
 
+	s := state.SwapSuggestion
+	if s != nil {
+		dir := "token0→token1"
+		if !s.ZeroForOne {
+			dir = "token1→token0"
+		}
+		log.Printf("swap-plan %s amountIn=%s estimatedOut=%s postLiquidity=%s",
+			dir, s.AmountIn, s.EstimatedOut, s.PostLiquidity)
+	}
+
 	if decision.Action == ActionNone {
 		log.Printf("no action: %s", decision.Reason)
 		return nil
@@ -207,13 +235,16 @@ func (k *Keeper) tick(ctx context.Context) error {
 
 	switch decision.Action {
 	case ActionMaintain:
-		return k.sendMaintain(ctx)
+		tl := big.NewInt(int64(state.TickLower))
+		tu := big.NewInt(int64(state.TickUpper))
+		return k.sendMaintain(ctx, s.ZeroForOne, s.AmountIn, tl, tu)
 	case ActionCollect:
 		return k.sendCollect(ctx)
 	}
 	return nil
 }
 
+// State holds the current on-chain snapshot used for decision-making.
 type State struct {
 	CurrentTick int32
 	TickLower   int32
@@ -224,10 +255,12 @@ type State struct {
 	TokensOwed0 *big.Int
 	TokensOwed1 *big.Int
 	Summary     string
+
+	SwapSuggestion *strategy.SwapSuggestion
 }
 
+// Evaluate reads chain state and returns the recommended action.
 func (k *Keeper) Evaluate(ctx context.Context) (Decision, State, error) {
-	_ = ctx
 	callOpts := &bind.CallOpts{Context: ctx}
 
 	slot0, err := k.pool.Slot0(callOpts)
@@ -264,76 +297,130 @@ func (k *Keeper) Evaluate(ctx context.Context) (Decision, State, error) {
 	if err != nil {
 		return Decision{}, State{}, fmt.Errorf("needRebalance: %w", err)
 	}
-	needRebalanceLocal := math.NeedRebalance(currentTick, tickLower, tickUpper, hasPosition)
 
 	expectedLower, expectedUpper := math.ComputeTickRange(currentTick, k.halfRangeTicks, tickSpacing)
 
+	var simLower, simUpper int32
+	if needRebalanceOnChain || !hasPosition {
+		simLower, simUpper = expectedLower, expectedUpper
+	} else {
+		simLower, simUpper = tickLower, tickUpper
+	}
+	sqrtPrice := slot0.SqrtPriceX96
+	sqrtLower := math.GetSqrtRatioAtTick(simLower)
+	sqrtUpper := math.GetSqrtRatioAtTick(simUpper)
+
+	sim0, sim1 := idle0, idle1
+	if needRebalanceOnChain && hasPosition {
+		if pos.TokensOwed0 != nil {
+			sim0 = new(big.Int).Add(idle0, pos.TokensOwed0)
+		}
+		if pos.TokensOwed1 != nil {
+			sim1 = new(big.Int).Add(idle1, pos.TokensOwed1)
+		}
+	}
+
+	quoteFunc := func(amountIn *big.Int, zeroForOne bool) (*big.Int, *big.Int, error) {
+		return k.quoteViaQuoter(callOpts, amountIn, zeroForOne)
+	}
+
+	swapSug, err := strategy.FindBestSwap(
+		sim0, sim1, sqrtPrice, sqrtLower, sqrtUpper,
+		quoteFunc, k.minSwap0, k.minSwap1,
+	)
+	if err != nil {
+		log.Printf("FindBestSwap error (non-fatal): %v", err)
+	}
+
 	state := State{
-		CurrentTick: currentTick,
-		TickLower:   tickLower,
-		TickUpper:   tickUpper,
-		Liquidity:   pos.Liquidity,
-		Idle0:       idle0,
-		Idle1:       idle1,
-		TokensOwed0: pos.TokensOwed0,
-		TokensOwed1: pos.TokensOwed1,
-		Summary: fmt.Sprintf("needRebalance(chain=%v local=%v) expectedRange=[%d,%d]",
-			needRebalanceOnChain, needRebalanceLocal, expectedLower, expectedUpper),
+		CurrentTick:    currentTick,
+		TickLower:      tickLower,
+		TickUpper:      tickUpper,
+		Liquidity:      pos.Liquidity,
+		Idle0:          idle0,
+		Idle1:          idle1,
+		TokensOwed0:    pos.TokensOwed0,
+		TokensOwed1:    pos.TokensOwed1,
+		SwapSuggestion: swapSug,
+		Summary: fmt.Sprintf(
+			"needRebalance=%v hasPos=%v expectedRange=[%d,%d]",
+			needRebalanceOnChain, hasPosition, expectedLower, expectedUpper,
+		),
 	}
 
 	if needRebalanceOnChain {
-		return Decision{
-			Action: ActionMaintain,
-			Reason: "price out of position range or no position",
-		}, state, nil
+		return Decision{ActionMaintain, "price out of position range or no position"}, state, nil
 	}
 
-	sqrtPrice := slot0.SqrtPriceX96
-	var sqrtLower, sqrtUpper *big.Int
-	if hasPosition {
-		sqrtLower = math.GetSqrtRatioAtTick(tickLower)
-		sqrtUpper = math.GetSqrtRatioAtTick(tickUpper)
-	} else {
-		sqrtLower = math.GetSqrtRatioAtTick(expectedLower)
-		sqrtUpper = math.GetSqrtRatioAtTick(expectedUpper)
+	if swapSug != nil {
+		return Decision{ActionMaintain, "binary-search swap improves LP efficiency"}, state, nil
 	}
 
-	if math.ShouldSwap(idle0, idle1, sqrtPrice, sqrtLower, sqrtUpper, k.minSwap0, k.minSwap1) {
-		return Decision{
-			Action: ActionMaintain,
-			Reason: "idle token excess above min swap threshold",
-		}, state, nil
-	}
+	//hasIdle := idle0.Cmp(k.minIdle0) >= 0 || idle1.Cmp(k.minIdle1) >= 0
+	//if hasIdle && hasPosition {
+	//	return Decision{ActionMaintain, "idle tokens above threshold, mint into position"}, state, nil
+	//}
+	//if !hasPosition && (idle0.Sign() > 0 || idle1.Sign() > 0) {
+	//	return Decision{ActionMaintain, "idle tokens without open position"}, state, nil
+	//}
+	//
+	//if pos.TokensOwed0.Sign() > 0 || pos.TokensOwed1.Sign() > 0 {
+	//	return Decision{ActionCollect, "uncollected fees on position"}, state, nil
+	//}
 
-	hasIdle := idle0.Cmp(k.minIdle0) >= 0 || idle1.Cmp(k.minIdle1) >= 0
-	if hasIdle && hasPosition {
-		return Decision{
-			Action: ActionMaintain,
-			Reason: "idle tokens to mint into existing position",
-		}, state, nil
-	}
-
-	if !hasPosition && (idle0.Sign() > 0 || idle1.Sign() > 0) {
-		return Decision{
-			Action: ActionMaintain,
-			Reason: "idle tokens without open position",
-		}, state, nil
-	}
-
-	if pos.TokensOwed0.Sign() > 0 || pos.TokensOwed1.Sign() > 0 {
-		return Decision{
-			Action: ActionCollect,
-			Reason: "uncollected fees on position",
-		}, state, nil
-	}
-
-	return Decision{Action: ActionNone, Reason: "position healthy"}, state, nil
+	return Decision{ActionNone, "position healthy"}, state, nil
 }
 
-func (k *Keeper) sendMaintain(ctx context.Context) error {
+// quoteViaQuoter calls the Uniswap V3 Quoter V2 contract via eth_call.
+func (k *Keeper) quoteViaQuoter(callOpts *bind.CallOpts, amountIn *big.Int, zeroForOne bool) (*big.Int, *big.Int, error) {
+	tokenIn := k.token0Addr
+	tokenOut := k.token1Addr
+	sqrtLimit := minSqrtRatioPlusOne()
+	if !zeroForOne {
+		tokenIn, tokenOut = k.token1Addr, k.token0Addr
+		sqrtLimit = maxSqrtRatioMinusOne()
+	}
+
+	params := contracts.IQuoterV2QuoteExactInputSingleParams{
+		TokenIn:           tokenIn,
+		TokenOut:          tokenOut,
+		AmountIn:          amountIn,
+		Fee:               big.NewInt(int64(k.fee)),
+		SqrtPriceLimitX96: sqrtLimit,
+	}
+
+	raw := &contracts.IQuoterV2CallerRaw{Contract: &k.quoter.IQuoterV2Caller}
+	var out []interface{}
+	if err := raw.Call(callOpts, &out, "quoteExactInputSingle", params); err != nil {
+		return nil, nil, fmt.Errorf("quoteExactInputSingle: %w", err)
+	}
+
+	if len(out) < 4 {
+		return nil, nil, fmt.Errorf("quoteExactInputSingle: unexpected result length %d", len(out))
+	}
+	amountOut, ok := out[0].(*big.Int)
+	sqrtPriceX96After, ok := out[1].(*big.Int)
+	if !ok {
+		return nil, nil, fmt.Errorf("quoteExactInputSingle: unexpected type for amountOut")
+	}
+	return amountOut, sqrtPriceX96After, nil
+}
+
+func minSqrtRatioPlusOne() *big.Int {
+	// Uniswap V3 MIN_SQRT_RATIO = 4295128739
+	return big.NewInt(4295128740)
+}
+
+func maxSqrtRatioMinusOne() *big.Int {
+	// Uniswap V3 MAX_SQRT_RATIO
+	r, _ := new(big.Int).SetString("1461446703485210103287273052203988822378723970341", 10)
+	return r
+}
+
+func (k *Keeper) sendMaintain(ctx context.Context, zeroForOne bool, amountIn *big.Int, tickLower, tickUpper *big.Int) error {
 	opts := *k.transactOpts
 	opts.Context = ctx
-	tx, err := k.strategy.Maintain(&opts)
+	tx, err := k.strategy.Maintain(&opts, zeroForOne, amountIn, tickLower, tickUpper)
 	if err != nil {
 		return fmt.Errorf("maintain tx: %w", err)
 	}

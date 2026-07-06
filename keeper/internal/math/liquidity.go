@@ -1,131 +1,95 @@
 package math
 
-import (
-	"math/big"
+import "math/big"
 
-	"github.com/holiman/uint256"
-)
+var q96 = new(big.Int).Lsh(big.NewInt(1), 96)
 
-var q96 = new(uint256.Int).Lsh(uint256.NewInt(1), 96)
-
-// ShouldSwap mirrors on-chain _basicSwap excess + min amount checks.
-func ShouldSwap(
-	amount0, amount1 *big.Int,
-	sqrtPriceX96, sqrtLower, sqrtUpper *big.Int,
-	minSwap0, minSwap1 *big.Int,
-) bool {
-	if (amount0 == nil || amount0.Sign() == 0) && (amount1 == nil || amount1.Sign() == 0) {
-		return false
-	}
-
-	liquidity := getLiquidityForAmounts(sqrtPriceX96, sqrtLower, sqrtUpper, amount0, amount1)
-	if liquidity.Sign() == 0 {
-		return false
-	}
-
-	need0, need1 := getAmountsForLiquidity(sqrtPriceX96, sqrtLower, sqrtUpper, liquidity)
-
-	if amount0.Cmp(need0) > 0 {
-		excess0 := new(big.Int).Sub(amount0, need0)
-		return excess0.Cmp(minSwap0) >= 0
-	}
-	if amount1.Cmp(need1) > 0 {
-		excess1 := new(big.Int).Sub(amount1, need1)
-		return excess1.Cmp(minSwap1) >= 0
-	}
-	return false
-}
-
-func getLiquidityForAmounts(
+func GetLiquidityForAmounts(
 	sqrtPriceX96, sqrtRatioAX96, sqrtRatioBX96 *big.Int,
 	amount0, amount1 *big.Int,
 ) *big.Int {
 	sqrtA, sqrtB := sortRatios(sqrtRatioAX96, sqrtRatioBX96)
-	price, a, b := toU256(sqrtPriceX96), toU256(sqrtA), toU256(sqrtB)
+	price := bigOrZero(sqrtPriceX96)
 
-	if price.Cmp(a) <= 0 {
-		return getLiquidityForAmount0(a, b, toU256(amount0)).ToBig()
+	if price.Cmp(sqrtA) <= 0 {
+		return getLiquidityForAmount0(sqrtA, sqrtB, bigOrZero(amount0))
 	}
-	if price.Cmp(b) < 0 {
-		l0 := getLiquidityForAmount0(price, b, toU256(amount0))
-		l1 := getLiquidityForAmount1(a, price, toU256(amount1))
+	if price.Cmp(sqrtB) < 0 {
+		l0 := getLiquidityForAmount0(price, sqrtB, bigOrZero(amount0))
+		l1 := getLiquidityForAmount1(sqrtA, price, bigOrZero(amount1))
 		if l0.Cmp(l1) < 0 {
-			return l1.ToBig()
+			return l0
 		}
-		return l0.ToBig()
+		return l1
 	}
-	return getLiquidityForAmount1(a, b, toU256(amount1)).ToBig()
+	return getLiquidityForAmount1(sqrtA, sqrtB, bigOrZero(amount1))
 }
 
-func getAmountsForLiquidity(
+func GetAmountsForLiquidity(
 	sqrtPriceX96, sqrtRatioAX96, sqrtRatioBX96 *big.Int,
 	liquidity *big.Int,
 ) (*big.Int, *big.Int) {
 	sqrtA, sqrtB := sortRatios(sqrtRatioAX96, sqrtRatioBX96)
-	price, a, b := toU256(sqrtPriceX96), toU256(sqrtA), toU256(sqrtB)
-	liq := toU256(liquidity)
+	price := bigOrZero(sqrtPriceX96)
+	liq := bigOrZero(liquidity)
 
-	var amount0, amount1 uint256.Int
-	if price.Cmp(a) <= 0 {
-		amount0 = *getAmount0ForLiquidity(a, b, liq)
-	} else if price.Cmp(b) < 0 {
-		amount0 = *getAmount0ForLiquidity(price, b, liq)
-		amount1 = *getAmount1ForLiquidity(a, price, liq)
-	} else {
-		amount1 = *getAmount1ForLiquidity(a, b, liq)
+	if price.Cmp(sqrtA) <= 0 {
+		return getAmount0ForLiquidity(sqrtA, sqrtB, liq), big.NewInt(0)
 	}
-	return amount0.ToBig(), amount1.ToBig()
+	if price.Cmp(sqrtB) < 0 {
+		return getAmount0ForLiquidity(price, sqrtB, liq),
+			getAmount1ForLiquidity(sqrtA, price, liq)
+	}
+	return big.NewInt(0), getAmount1ForLiquidity(sqrtA, sqrtB, liq)
 }
 
-func getLiquidityForAmount0(sqrtA, sqrtB, amount0 *uint256.Int) *uint256.Int {
-	if sqrtA.Cmp(sqrtB) > 0 {
-		sqrtA, sqrtB = sqrtB, sqrtA
-	}
+func GetLiquidityForAmount0(sqrtPriceAX96, sqrtPriceBX96, amount0 *big.Int) *big.Int {
+	a, b := sortRatios(sqrtPriceAX96, sqrtPriceBX96)
+	return getLiquidityForAmount0(a, b, bigOrZero(amount0))
+}
+
+func GetLiquidityForAmount1(sqrtPriceAX96, sqrtPriceBX96, amount1 *big.Int) *big.Int {
+	a, b := sortRatios(sqrtPriceAX96, sqrtPriceBX96)
+	return getLiquidityForAmount1(a, b, bigOrZero(amount1))
+}
+
+func getLiquidityForAmount0(sqrtA, sqrtB, amount0 *big.Int) *big.Int {
+	sqrtA, sqrtB = sortRatios(sqrtA, sqrtB)
 	intermediate := mulDiv(sqrtA, sqrtB, q96)
-	return mulDiv(amount0, intermediate, new(uint256.Int).Sub(sqrtB, sqrtA))
+	return mulDiv(amount0, intermediate, new(big.Int).Sub(sqrtB, sqrtA))
 }
 
-func getLiquidityForAmount1(sqrtA, sqrtB, amount1 *uint256.Int) *uint256.Int {
-	if sqrtA.Cmp(sqrtB) > 0 {
-		sqrtA, sqrtB = sqrtB, sqrtA
-	}
-	return mulDiv(amount1, q96, new(uint256.Int).Sub(sqrtB, sqrtA))
+func getLiquidityForAmount1(sqrtA, sqrtB, amount1 *big.Int) *big.Int {
+	sqrtA, sqrtB = sortRatios(sqrtA, sqrtB)
+	return mulDiv(amount1, q96, new(big.Int).Sub(sqrtB, sqrtA))
 }
 
-func getAmount0ForLiquidity(sqrtA, sqrtB, liquidity *uint256.Int) *uint256.Int {
-	if sqrtA.Cmp(sqrtB) > 0 {
-		sqrtA, sqrtB = sqrtB, sqrtA
-	}
-	numerator := mulDiv(liquidity, new(uint256.Int).Sub(sqrtB, sqrtA), sqrtB)
+func getAmount0ForLiquidity(sqrtA, sqrtB, liquidity *big.Int) *big.Int {
+	sqrtA, sqrtB = sortRatios(sqrtA, sqrtB)
+	numerator := mulDiv(liquidity, new(big.Int).Sub(sqrtB, sqrtA), sqrtB)
 	return mulDiv(numerator, q96, sqrtA)
 }
 
-func getAmount1ForLiquidity(sqrtA, sqrtB, liquidity *uint256.Int) *uint256.Int {
-	if sqrtA.Cmp(sqrtB) > 0 {
-		sqrtA, sqrtB = sqrtB, sqrtA
-	}
-	return mulDiv(liquidity, new(uint256.Int).Sub(sqrtB, sqrtA), q96)
+func getAmount1ForLiquidity(sqrtA, sqrtB, liquidity *big.Int) *big.Int {
+	sqrtA, sqrtB = sortRatios(sqrtA, sqrtB)
+	return mulDiv(liquidity, new(big.Int).Sub(sqrtB, sqrtA), q96)
 }
 
-func mulDiv(a, b, denom *uint256.Int) *uint256.Int {
-	product := new(uint256.Int).Mul(a, b)
-	return new(uint256.Int).Div(product, denom)
+func mulDiv(a, b, denom *big.Int) *big.Int {
+	return new(big.Int).Div(new(big.Int).Mul(a, b), denom)
 }
 
 func sortRatios(a, b *big.Int) (*big.Int, *big.Int) {
+	a, b = bigOrZero(a), bigOrZero(b)
 	if a.Cmp(b) > 0 {
 		return b, a
 	}
 	return a, b
 }
 
-func toU256(v *big.Int) *uint256.Int {
+func bigOrZero(v *big.Int) *big.Int {
 	if v == nil {
-		return uint256.NewInt(0)
+		return big.NewInt(0)
 	}
-	out, overflow := uint256.FromBig(v)
-	if overflow {
-		panic("uint256 overflow")
-	}
-	return out
+	return v
 }
