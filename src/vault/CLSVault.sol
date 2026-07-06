@@ -56,10 +56,7 @@ contract CLSVault is ERC20 {
     }
 
     /// @notice Redeem vault shares for a pro-rata share of token0 and token1.
-    function withdraw(uint256 shares)
-        external
-        returns (uint256 amount0, uint256 amount1)
-    {
+    function withdraw(uint256 shares) external returns (uint256 amount0, uint256 amount1) {
         if (shares == 0 || shares > balanceOf(msg.sender)) {
             revert CLSVault__InvalidShares();
         }

@@ -40,8 +40,7 @@ contract UniswapV3StrategyTest is Test {
     }
 
     function testInitializeSetsVaultAndOwner() public {
-        UniswapV3StrategyHarness fresh =
-            new UniswapV3StrategyHarness(address(pool), npm, swapRouter, HALF_RANGE, 0, 0);
+        UniswapV3StrategyHarness fresh = new UniswapV3StrategyHarness(address(pool), npm, swapRouter, HALF_RANGE, 0, 0);
         fresh.initialize(vault, owner);
     }
 

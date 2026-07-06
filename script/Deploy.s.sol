@@ -78,9 +78,7 @@ contract DeployCLSVault is Script {
         console2.log("Token0", token0);
         console2.log("Token1", token1);
 
-        UniswapV3Strategy strategy = new UniswapV3Strategy(
-            pool, npm, swapRouter, halfRange, minSwap0, minSwap1
-        );
+        UniswapV3Strategy strategy = new UniswapV3Strategy(pool, npm, swapRouter, halfRange, minSwap0, minSwap1);
         CLSVault vault = new CLSVault(address(strategy), token0, token1);
         strategy.initialize(address(vault), owner);
 

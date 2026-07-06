@@ -94,12 +94,7 @@ contract UniswapV3Strategy is IStrategy {
     }
 
     /// @dev Owner entrypoint: rebalance range, optimal swap, mint/increase liquidity.
-    function maintain(
-        bool zeroForOne,
-        uint256 amountIn,
-        int24 tickLower,
-        int24 tickUpper
-    ) external onlyOwner {
+    function maintain(bool zeroForOne, uint256 amountIn, int24 tickLower, int24 tickUpper) external onlyOwner {
         _collect();
         npm.burn(tokenID);
         tokenID = 0;
@@ -119,8 +114,7 @@ contract UniswapV3Strategy is IStrategy {
     function _deployLiquidity() internal {
         int24 tickLower;
         int24 tickUpper;
-        (int24 currentTick, int24 currentTickLower, int24 currentTickUpper, uint128 liquidity) =
-            _getRebalanceParams();
+        (int24 currentTick, int24 currentTickLower, int24 currentTickUpper, uint128 liquidity) = _getRebalanceParams();
 
         if (_needRebalance(currentTick, currentTickLower, currentTickUpper)) {
             if (tokenID != 0 && liquidity > 0) {
@@ -427,10 +421,7 @@ contract UniswapV3Strategy is IStrategy {
         return _rebalance(currentTick);
     }
 
-    function _rebalance(int24 currentTick)
-        internal
-        returns (int24 tickLower, int24 tickUpper)
-    {
+    function _rebalance(int24 currentTick) internal returns (int24 tickLower, int24 tickUpper) {
         (tickLower, tickUpper) = _computeTickRange(currentTick);
     }
 
