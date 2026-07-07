@@ -25,6 +25,7 @@ contract UniswapV3Strategy is IStrategy {
     address private immutable token0;
     address private immutable token1;
     uint24 private immutable fee;
+    int24 private immutable tickSpacing;
     address private immutable swapRouter;
     int24 private immutable halfRangeTicks;
     uint256 private immutable minSwapAmount0;
@@ -59,11 +60,12 @@ contract UniswapV3Strategy is IStrategy {
         token0 = pool_.token0();
         token1 = pool_.token1();
         fee = pool_.fee();
+        tickSpacing = pool_.tickSpacing();
 
-        IERC20(token0).forceApprove(_npm, type(uint256).max);
-        IERC20(token1).forceApprove(_npm, type(uint256).max);
-        IERC20(token0).forceApprove(_swapRouter, type(uint256).max);
-        IERC20(token1).forceApprove(_swapRouter, type(uint256).max);
+        IERC20(token0).safeApprove(_npm, type(uint256).max);
+        IERC20(token1).safeApprove(_npm, type(uint256).max);
+        IERC20(token0).safeApprove(_swapRouter, type(uint256).max);
+        IERC20(token1).safeApprove(_swapRouter, type(uint256).max);
     }
 
     modifier onlyVault() {
@@ -426,13 +428,12 @@ contract UniswapV3Strategy is IStrategy {
     }
 
     function _computeTickRange(int24 currentTick) internal view returns (int24 tickLower, int24 tickUpper) {
-        int24 spacing = IUniswapV3Pool(pool).tickSpacing();
-        int24 center = _floor(currentTick, spacing);
-        tickLower = _floor(center - halfRangeTicks, spacing);
-        tickUpper = _floor(center + halfRangeTicks, spacing);
+        int24 center = _floor(currentTick, tickSpacing);
+        tickLower = _floor(center - halfRangeTicks, tickSpacing);
+        tickUpper = _floor(center + halfRangeTicks, tickSpacing);
 
         if (tickLower >= tickUpper) {
-            tickUpper = tickLower + spacing;
+            tickUpper = tickLower + tickSpacing;
         }
     }
 

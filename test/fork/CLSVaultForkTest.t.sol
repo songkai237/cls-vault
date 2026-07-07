@@ -33,7 +33,7 @@ contract CLSVaultForkTest is Test {
     address internal user = makeAddr("user");
 
     function setUp() public {
-        vm.createSelectFork(vm.envString("MAINNET_RPC"), 19_000_000);
+        vm.createSelectFork(vm.envString("MAINNET_RPC_URL"), 19_000_000);
 
         strategy = new UniswapV3Strategy(POOL, NPM, SWAP_ROUTER, HALF_RANGE, MIN_SWAP_USDC, MIN_SWAP_WETH);
         vault = new CLSVault(address(strategy), USDC, WETH);
